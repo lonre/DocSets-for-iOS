@@ -12,6 +12,23 @@
 #import "SwipeSplitViewController.h"
 #import "BookmarksViewController.h"
 #import "DocSet.h"
+#import "LRDictHelper.h"
+#import "MBProgressHUD.h"
+
+#pragma mark - === UIWebView trick category ===
+
+@implementation UIWebView (TRICK)
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+  if (action == @selector(copy:)) {
+    return YES;
+  }
+  return NO;
+}
+
+@end
+
+#pragma mark - === DetailViewController ===
 
 #define EXTERNAL_LINK_ALERT_TAG	1
 
@@ -25,6 +42,51 @@
 @implementation DetailViewController
 
 @synthesize docSet, currentURL;
+
+#pragma mark - === Private ===
+
+- (void)showDefinition {
+  NSString *selection = [[webView stringByEvaluatingJavaScriptFromString:@"window.getSelection().toString()"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  
+  UIFont *font = [UIFont systemFontOfSize:16];
+  UIView *parentView = [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone ? self.navigationController.view : self.view;
+  CGSize parentViewSize = parentView.bounds.size;
+  UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hideDefinitionView:)];
+  tap.numberOfTapsRequired = 1;
+  tap.numberOfTouchesRequired = 1;
+  
+	MBProgressHUD *hud = [[MBProgressHUD alloc] initWithView:parentView];
+	[parentView addSubview:hud];
+  [hud addGestureRecognizer:tap];
+  hud.removeFromSuperViewOnHide = YES;
+  hud.minSize = CGSizeMake(parentViewSize.width - 4, 0);
+  hud.margin = 5;
+  hud.opacity = 0.8;
+  hud.detailsLabelFont = font;
+  hud.yOffset = -(roundf((parentViewSize.height - 37-2*hud.margin)/2) - 22);
+	[hud show:YES];
+  
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+    
+    if (selection != nil) {
+      NSString *definition = [LRDictHelper definitionForWord:selection];
+      if (!definition) definition = @"Sorry 😥";
+      CGSize definitionSize = [definition sizeWithFont:font constrainedToSize:CGSizeMake(parentViewSize.width - 4*hud.margin, parentViewSize.height/2) lineBreakMode:UILineBreakModeWordWrap];
+      hud.yOffset = -(roundf((parentViewSize.height - definitionSize.height-2*hud.margin)/2) - 22);
+      hud.mode = MBProgressHUDModeText;
+      hud.detailsLabelText = definition;
+    }
+  });
+}
+
+- (void)hideDefinitionView:(UITapGestureRecognizer *)tapGR {
+  [MBProgressHUD hideAllHUDsForView:([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone ? self.navigationController.view : self.view) animated:YES];
+  //trick to deselect word
+  webView.userInteractionEnabled = NO;
+  webView.userInteractionEnabled = YES;
+}
+
+#pragma mark - === lifecycle ===
 
 - (id)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil
 {
@@ -63,6 +125,9 @@
 	if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone && self.navigationController.toolbarHidden) {
 		[self.navigationController setToolbarHidden:NO animated:animated];
 	}
+  
+  UIMenuItem *definitionMenuItem = [[UIMenuItem alloc] initWithTitle:@"Definition" action:@selector(showDefinition)];
+  [[UIMenuController sharedMenuController] setMenuItems:[NSArray arrayWithObjects:definitionMenuItem, nil]];
 }
 
 - (void)loadView
@@ -524,6 +589,15 @@
 	return interfaceOrientation == UIInterfaceOrientationPortrait;
 }
 
+#pragma mark - === UIResponder ===
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+  if (action == @selector(showDefinition)) {
+    return YES;
+  }
+  
+  return [super canPerformAction:action withSender:sender];
+}
 
 #pragma mark -
 #pragma mark Memory management
