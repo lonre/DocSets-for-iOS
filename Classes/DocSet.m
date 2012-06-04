@@ -11,7 +11,7 @@
 
 @implementation DocSet
 
-@synthesize path, title, copyright, bookmarks;
+@synthesize path, title, copyright, bundleID;
 
 - (id)initWithPath:(NSString *)docSetPath
 {
@@ -22,6 +22,8 @@
 	NSString *infoPath = [path stringByAppendingPathComponent:@"Contents/Info.plist"];
 	NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
 	title = [info objectForKey:@"CFBundleName"];
+	bundleID = [info objectForKey:@"CFBundleIdentifier"];
+	
 	fallbackURL = [NSURL URLWithString:[info objectForKey:@"DocSetFallbackURL"]];
 	if (title) {
 		copyright = [info objectForKey:@"NSHumanReadableCopyright"];
@@ -29,30 +31,12 @@
 	} else {
 		self = nil;
 	}
-		
+	
 	searchQueue = dispatch_queue_create("DocSet Search Queue", NULL);
 	
 	return self;
 }
 
-- (NSMutableArray *)bookmarks
-{
-	//load bookmarks lazily:
-	if (!bookmarks) {
-		NSString *bookmarksPath = [path stringByAppendingPathComponent:@"Bookmarks.plist"];
-		bookmarks = [NSMutableArray arrayWithContentsOfFile:bookmarksPath];
-		if (!bookmarks) {
-			bookmarks = [NSMutableArray array];
-		}
-	}
-	return bookmarks;
-}
-
-- (void)saveBookmarks
-{
-	NSString *bookmarksPath = [path stringByAppendingPathComponent:@"Bookmarks.plist"];
-	[[self bookmarks] writeToFile:bookmarksPath atomically:YES];
-}
 
 - (void)prepareSearch
 {
@@ -164,7 +148,7 @@
 		NSMutableArray *results = [NSMutableArray array];
 		//Do a simpler prefix search for very short search terms. Otherwise, too many irrelevant results would
 		//clutter the results and most of the relevant results would probably not be returned at all, because
-		//the maxNumberOfResults is already reached...
+		//the maximum number of results is already reached...
 		BOOL prefixSearch = searchTerm.length < 3;
 		for (NSDictionary *token in tokens) {
 			NSString *tokenName = [token objectForKey:@"tokenName"];
@@ -283,7 +267,16 @@
 
 - (NSURL *)webURLForNode:(NSManagedObject *)node
 {
-	return [fallbackURL URLByAppendingPathComponent:[node valueForKey:@"kPath"]];
+	NSString *nodePath = [node valueForKey:@"kPath"];
+	if (nodePath) {
+		return [fallbackURL URLByAppendingPathComponent:nodePath];
+	} else {
+		NSString *webURL = [node valueForKey:@"kURL"];
+		if (webURL) {
+			return [NSURL URLWithString:webURL];
+		}
+	}
+	return nil;
 }
 
 

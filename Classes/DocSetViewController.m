@@ -9,6 +9,7 @@
 #import "DocSetViewController.h"
 #import "DocSet.h"
 #import "DetailViewController.h"
+#import "BookmarksViewController.h"
 
 #define SEARCH_SPINNER_TAG	1
 
@@ -74,6 +75,11 @@
 	searchDisplayController.delegate = self;
 	searchDisplayController.searchResultsDataSource = self;
 	searchDisplayController.searchResultsDelegate = self;
+	
+	if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone) {
+		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemBookmarks target:self action:@selector(showBookmarks:)];
+		self.navigationItem.rightBarButtonItem.style = UIBarButtonItemStylePlain;
+	}
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -95,7 +101,7 @@
 	if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
 		return YES;
 	}
-	return interfaceOrientation == UIInterfaceOrientationPortrait;
+	return UIInterfaceOrientationIsLandscape(interfaceOrientation) || (interfaceOrientation == UIInterfaceOrientationPortrait);
 }
 
 #pragma mark - Search
@@ -313,7 +319,12 @@
 	if (aTableView == self.tableView) {
 		NSDictionary *nodeSection = [nodeSections objectAtIndex:indexPath.section];
 		NSManagedObject *node = [[nodeSection objectForKey:kNodeSectionNodes] objectAtIndex:indexPath.row];
-		[self openNode:node];
+		if ([[node valueForKey:@"installDomain"] intValue] > 1) {
+			[aTableView deselectRowAtIndexPath:indexPath animated:YES];
+			[self openNode:node];
+		} else {
+			[self openNode:node];
+		}
 	} else if (aTableView == self.searchDisplayController.searchResultsTableView) {
 		[self.searchDisplayController.searchBar resignFirstResponder];
 		NSDictionary *result = [searchResults objectAtIndex:indexPath.row];
@@ -327,7 +338,11 @@
 			}
 		} else {
 			NSManagedObject *node = [[docSet managedObjectContext] existingObjectWithID:[result objectForKey:@"objectID"] error:NULL];
-			[self openNode:node];
+			if ([[node valueForKey:@"installDomain"] intValue] > 1) {
+				[aTableView deselectRowAtIndexPath:indexPath animated:YES];
+			} else {
+				[self openNode:node];
+			}
 		}
 	}
 }
@@ -340,13 +355,13 @@
 		childViewController.detailViewController = self.detailViewController;
 		[self.navigationController pushViewController:childViewController animated:YES];
 	} else {
-		
 		if ([[node valueForKey:@"installDomain"] intValue] > 1) {
 			NSURL *webURL = [docSet webURLForNode:node];
-			[[UIApplication sharedApplication] openURL:webURL];
+			if (webURL) {
+				[[UIApplication sharedApplication] openURL:webURL];
+			}
 			return;
 		}
-		
 		if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
 			[self.detailViewController showNode:node inDocSet:docSet];
 		} else {
@@ -355,6 +370,25 @@
 			[self.detailViewController showNode:node inDocSet:docSet];
 		}
 	}
+}
+
+- (void)showBookmarks:(id)sender
+{
+	BookmarksViewController *vc = [[BookmarksViewController alloc] initWithDocSet:self.docSet];
+	vc.delegate = self;
+	UINavigationController *navController = [[UINavigationController alloc] initWithRootViewController:vc];
+	navController.toolbarHidden = NO;
+	[self presentModalViewController:navController animated:YES];
+}
+
+- (void)bookmarksViewController:(BookmarksViewController *)viewController didSelectBookmark:(NSDictionary *)bookmark
+{	
+	[viewController dismissModalViewControllerAnimated:YES];
+	DetailViewController *vc = [[DetailViewController alloc] initWithNibName:nil bundle:nil];
+	vc.docSet = self.docSet;
+	[self.navigationController pushViewController:vc animated:YES];
+	[vc loadView];
+	[vc bookmarksViewController:viewController didSelectBookmark:bookmark];
 }
 
 #pragma mark -

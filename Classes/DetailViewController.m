@@ -12,6 +12,7 @@
 #import "SwipeSplitViewController.h"
 #import "BookmarksViewController.h"
 #import "DocSet.h"
+#import "BookmarksManager.h"
 #import "LRDictHelper.h"
 #import "MBProgressHUD.h"
 
@@ -116,7 +117,8 @@
 		spaceItem.width = 24.0;	
 		portraitToolbarItems = [NSArray arrayWithObjects:browseButtonItem, spaceItem, backButtonItem, spaceItem, forwardButtonItem, flexSpace, bookmarksButtonItem, spaceItem, actionButtonItem, spaceItem, outlineButtonItem, nil];
 		landscapeToolbarItems = [NSArray arrayWithObjects:backButtonItem, spaceItem, forwardButtonItem, flexSpace, bookmarksButtonItem, spaceItem, actionButtonItem, spaceItem, outlineButtonItem, nil];
-	}	
+	}
+		
 	return self;
 }
 
@@ -147,7 +149,7 @@
 	CGFloat topToolbarHeight = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) ? 44.0 : 0.0;
 	webView = [[UIWebView alloc] initWithFrame:CGRectMake(0, topToolbarHeight, self.view.bounds.size.width, self.view.bounds.size.height - topToolbarHeight)];
 	webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	webView.scalesPageToFit = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
+	webView.scalesPageToFit = YES;//([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
 	
 	webView.delegate = self;
 	[self.view addSubview:webView];
@@ -292,31 +294,30 @@
 - (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex
 {
 	if (buttonIndex != actionSheet.cancelButtonIndex) {
-		
 		NSString *currentURLString = [webView stringByEvaluatingJavaScriptFromString:@"window.location.href"];
 		currentURLString = (__bridge_transfer NSString *)CFURLCreateStringByAddingPercentEscapes(NULL, (__bridge CFStringRef)currentURLString, CFSTR("#"), CFSTR(""), CFStringConvertNSStringEncodingToEncoding(NSUTF8StringEncoding));
 		NSURL *URL = [NSURL URLWithString:currentURLString];
 		if (buttonIndex == 0) {
 			NSString *bookmarkTitle = [webView stringByEvaluatingJavaScriptFromString:@"document.title"];
-			NSMutableArray *bookmarks = [self.docSet bookmarks];
-			NSDictionary *existingBookmark = nil;
-			NSInteger existingBookmarkIndex = 0;
-			NSInteger i = 0;
-			for (NSDictionary *bookmark in bookmarks) {
-				if ([[bookmark objectForKey:@"URL"] isEqual:currentURLString]) {
-					existingBookmark = bookmark;
-					existingBookmarkIndex = i;
-					break;
+			NSString *bookmarkURL = currentURLString;
+			NSString *fragment = [URL fragment];
+			NSString *subtitle = @"";
+			if (fragment && fragment.length > 0) {
+				NSString *js = [NSString stringWithFormat:@"var elements = document.getElementsByName('%@'); if (elements.length > 0) { elements[0].title; } else { ''; }", 
+								fragment];
+				NSString *fragmentTitle = [webView stringByEvaluatingJavaScriptFromString:js];
+				subtitle = fragmentTitle;
+			}
+			if (bookmarkTitle && bookmarkURL) {
+				BOOL bookmarkAdded = [[BookmarksManager sharedBookmarksManager] addBookmarkWithURL:bookmarkURL title:bookmarkTitle subtitle:subtitle forDocSet:self.docSet];
+				if (!bookmarkAdded) {
+					[[[UIAlertView alloc] initWithTitle:NSLocalizedString(@"Error", nil) 
+												message:NSLocalizedString(@"Bookmarks are currently being synced. Please try again in a moment.", nil) 
+											   delegate:nil 
+									  cancelButtonTitle:NSLocalizedString(@"OK", nil) 
+									  otherButtonTitles:nil] show];
 				}
-				i++;
 			}
-			if (existingBookmark) {
-				//if the page is already bookmarked, move it to the top
-				[bookmarks removeObjectAtIndex:existingBookmarkIndex];
-			}
-			NSDictionary *newBookmark = [NSDictionary dictionaryWithObjectsAndKeys:currentURLString, @"URL", bookmarkTitle, @"title", nil];
-			[bookmarks insertObject:newBookmark atIndex:0];
-			[self.docSet saveBookmarks];
 		} else {
 			NSURL *webURL = [self.docSet webURLForLocalURL:URL];
 			if (buttonIndex == 1) {
@@ -339,8 +340,9 @@
 		if (activeSheet.visible) [activeSheet dismissWithClickedButtonIndex:activeSheet.cancelButtonIndex animated:NO];
 		
 		BookmarksViewController *vc = [[BookmarksViewController alloc] initWithDocSet:self.docSet];
-		vc.detailViewController = self;
+		vc.delegate = self;
 		UINavigationController *navController = [[UINavigationController alloc] initWithRootViewController:vc];
+		navController.toolbarHidden = NO;
 		if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
 			bookmarksPopover = [[UIPopoverController alloc] initWithContentViewController:navController];
 			[bookmarksPopover presentPopoverFromBarButtonItem:sender permittedArrowDirections:UIPopoverArrowDirectionUp animated:YES];
@@ -360,7 +362,8 @@
 - (void)setDocSet:(DocSet *)aDocSet
 {
 	docSet = aDocSet;
-	bookmarksButtonItem.enabled = (docSet != nil);
+	//bookmarksButtonItem.enabled = [[BookmarksManager sharedBookmarksManager] bookmarksAvailable];
+	bookmarksButtonItem.enabled = YES;
 }
 
 #pragma mark -
@@ -432,9 +435,10 @@
 	}
 }
 
-- (void)showBookmark:(NSDictionary *)bookmark
+- (void)bookmarksViewController:(BookmarksViewController *)viewController didSelectBookmark:(NSDictionary *)bookmark
 {
-	[self openURL:[NSURL URLWithString:[bookmark objectForKey:@"URL"]] withAnchor:nil];
+	NSURL *bookmarkURL = [[BookmarksManager sharedBookmarksManager] URLForBookmark:bookmark inDocSet:self.docSet];
+	[self openURL:bookmarkURL withAnchor:nil];
 	if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
 		[bookmarksPopover dismissPopoverAnimated:YES];
 	} else {
@@ -443,7 +447,7 @@
 }
 
 - (void)openURL:(NSURL *)URL withAnchor:(NSString *)anchor
-{	
+{
 	if (anchor) {
 		NSURL *URLWithAnchor = [NSURL URLWithString:[[URL absoluteString] stringByAppendingFormat:@"#%@", anchor]];
 		[webView loadRequest:[NSURLRequest requestWithURL:URLWithAnchor]];
@@ -469,7 +473,6 @@
 
 - (BOOL)webView:(UIWebView *)aWebView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType
 {
-	//TODO: It would probably be better to encapsulate this logic in the DocSet class...
 	NSURL *URL = [request URL];
 	[self updateBackForwardButtons];
 	if ([[URL scheme] isEqualToString:@"file"]) {
@@ -477,7 +480,7 @@
 		if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
 			customCSS = @"<style>body { font-size: 16px !important; } pre { white-space: pre-wrap !important; }</style>";
 		} else {
-			customCSS = @"<style>body { font-size: 15px !important; max-width: 320px; padding: 15px !important; } pre { white-space: pre-wrap !important; } h1 { font-size: 160% !important; } h2 { font-size: 150% !important; } .specbox { margin: 0px !important; } #feedbackForm { display: none; } </style>";
+			customCSS = @"<meta name = \"viewport\" content = \"width = device-width, initial-scale=1.0\"><style>body { font-size: 15px !important; padding: 15px !important; } pre { white-space: pre-wrap !important; } h1 {font-size: 22px !important;} h2 { font-size: 20px !important; } h3 { font-size: 18px !important; } .dtsDocNumber {font-size: 22px !important;} .specbox { margin-left: 0 !important; } #feedbackForm { display: none; }</style>";
 		}
 		NSString *html = [NSString stringWithContentsOfURL:URL encoding:NSUTF8StringEncoding error:NULL];
 		if ([[URL path] rangeOfString:@"__cached__"].location == NSNotFound) {
@@ -586,7 +589,7 @@
 	if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
 		return YES;
 	}
-	return interfaceOrientation == UIInterfaceOrientationPortrait;
+	return UIInterfaceOrientationIsLandscape(interfaceOrientation) || interfaceOrientation == UIInterfaceOrientationPortrait;
 }
 
 #pragma mark - === UIResponder ===
